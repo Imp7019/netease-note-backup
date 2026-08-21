@@ -1,137 +1,59 @@
-# 网易云音乐笔记(个人动态)备份工具
+# 网易云音乐动态备份（油猴脚本）
 
-## 📝 简介
+一个仅面向网页版网易云音乐的 Tampermonkey 脚本，用于备份自己的动态、图片和分享歌曲，并生成便于本地阅读的 HTML 回忆册。
 
-网易云音乐笔记(个人动态)备份工具是一款轻量级应用，用于备份网易云音乐用户的动态内容。提取用户发布的文字、图片和分享的音乐信息，将这些内容保存为 HTML 或纯文本格式，方便用户本地存档和查看。
-这款工具专注于单一功能 —— 高效、完整地备份网易云音乐的用户动态，不依赖任何网易云官方 API，完全基于公开网页内容进行爬取。
+> 仅在你已登录的浏览器中处理你有权访问的动态内容；不使用网易云官方 API。
 
-## ✨ 主要特性
+## 使用方式
 
-### 内容提取
+### 1. 安装油猴扩展
 
-- **文本内容**：保留原始文本格式，包括换行和基本样式
-- **图片资源**：提取高质量图片，支持查看大图
-- **音乐信息**：保存分享的歌曲和歌手信息及链接
-- **发布时间**：记录每条动态的发布时间
+- Chrome：[Tampermonkey](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo)
+- Edge：[Tampermonkey](https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd)
 
-### 导出选项
+### 2. 安装脚本
 
-- **HTML 导出**：
-  - 生成包含原始样式的 HTML 页面
-  - 集成图片查看器，支持点击放大
-  - 可选择嵌入 Base64 图片或使用原始链接
-- **文本复制**：快速复制为纯文本格式，方便分享
+点击 [安装脚本](https://raw.githubusercontent.com/Imp7019/netease-note-backup/master/netease-note-backup.user.js)，在 Tampermonkey 的安装页面确认安装。
 
----
+### 3. 打开动态页并导出
 
-## ⚠️ 使用说明
+1. 登录网页版网易云音乐。
+2. 访问 `https://music.163.com/#/user/event?id=你的用户ID`。
+3. 使用左上角面板的“自动滚动加载”获取更多动态；需要停止时再次点击该按钮。
+4. 设置导出范围、图片大小与是否嵌入 Base64 图片，点击“导出HTML”。
 
-本项目提供两种使用方式：
+登录后，脚本可以备份当前账号有权限访问的私密动态。
 
-1. **油猴脚本版本**：可备份包括私密(未公开)在内的所有个人动态，需要先登录网页版网易云
-2. **独立应用版本**：只能备份公开的动态内容，无需登录
+## 功能
 
-### 安装 Tampermonkey（油猴脚本必需）
+- 提取动态正文、发布时间、分享歌曲、歌手链接和图片。
+- 自动滚动加载历史动态，可随时停止。
+- 逐条动态读取“查看原图”，尽量保留图片原始比例与高分辨率链接。
+- 支持图片灯箱查看；可选 Base64 内嵌，生成可离线阅读的单文件 HTML。
+- 导出页提供账号头像与昵称、按年份/月份筛选、全文搜索，以及按年份分组的右侧时间轴。
+- 支持选择部分动态导出与复制纯文本。
 
-在使用油猴脚本之前，你需要先安装 Tampermonkey 浏览器扩展：
+## 相比原仓库的优化
 
-- Chrome：[Chrome 网上应用店](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo)
-- Edge：[Microsoft Edge 加载项](https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd)
+本仓库当前维护重点是油猴脚本，近期主要改动包括：
 
-开启浏览器的开发者模式：
+- 将朴素的列表导出页升级为响应式“动态回忆册”卡片布局。
+- 增加右侧时间轴，并按年份折叠、按月份定位动态。
+- 增加年份与月份组合筛选，以及正文、歌曲名、歌手名全文搜索。
+- 增强原图读取流程：以单条动态的 `li.itm` 和 `showpic` 面板为边界，避免不同动态之间串用图片查看器。
+- 优化图片查看器关闭与处理等待，减少导出后残留的原图窗口。
+- 放大并强化动态时间标签，补充账号信息卡，提升长档案阅读体验。
 
-1. Chrome: 访问 `chrome://extensions/`  
-   Edge: 访问 `edge://extensions/`
-2. 在右上角或左侧找到并开启"Developer mode"（开发者模式）开关
+## 图片选项
 
-### 获取网易云音乐用户 ID
+- **Base64 图片**：HTML 完全离线，但文件可能很大，导出耗时也更长。
+- **原始链接**：HTML 文件更小、更快，但查看图片时需要网络。
 
-1. 打开网易云音乐 APP
-2. 点击底部"我的" ⟶ 点击右上角菜单按钮 ⚙️
-3. 点击"分享" ⟶ "复制链接"
-4. 粘贴到记事本，链接中的数字部分即为用户 ID
+## 说明
 
-### 使用方式
+- 网易云页面结构变动可能影响脚本，请通过 Issues 提供页面截图与控制台报错信息。
+- 导出前应先让目标动态加载完成；自动滚动会在一段时间没有发现新内容后自动停止。
 
-**油猴脚本版本**：
+## 许可证
 
-- 安装脚本, 请点击[安装](https://raw.githubusercontent.com/sansan0/netease-note-backup/master/netease-note-backup.user.js)
-
-- 安装脚本后访问 `https://music.163.com/#/user/event?id=你的用户ID`
-
-- 登录后即可备份私密动态
-
-**独立应用版本**：
-
-- 点击 [下载](https://github.com/sansan0/netease-note-backup/releases)，下载最新的 NetEaseNoteBackup.zip 压缩包解压到电脑本地，运行应用后，点击下载浏览器，输入用户 ID（仅支持备份公开动态），点击加载即可
-
-![应用界面截图](_image/app_overview.png)
-
-## 💡 使用指南
-
-### 基本使用流程
-
-1. **输入用户 ID**：
-   - 在顶部输入框中输入网易云音乐用户 ID（纯数字）
-   - 点击"加载"按钮开始爬取
-2. **等待爬取完成**：
-   - 程序会自动滚动页面加载更多内容
-   - 状态栏显示当前爬取状态和进度
-   - 如需提前结束，可点击"终止"按钮
-3. **导出内容**：
-   - 设置要导出的动态范围（默认全部）
-   - 选择导出格式（HTML 或纯文本）
-   - 点击相应按钮执行导出操作
-
-### 导出 HTML 技巧
-
-HTML 导出提供更丰富的功能：
-
-1. **图片处理选项**：
-   - 勾选"将图片转为 base64 格式"可使 HTML 文件完全离线，但文件体积更大
-   - 不勾选则使用原始图片链接，文件更小但需网络连接查看图片
-2. **调整图片大小**：
-   - 使用"图片大小(px)"设置导出 HTML 中的缩略图大小
-   - 点击图片仍可查看原始大小
-3. **保存位置**：
-   - 点击"导出 HTML"后选择保存位置和文件名
-   - HTML 文件可在任何现代浏览器中查看
-
-## 🔧 安装与运行
-
-### 环境要求
-
-- Python 3.9+
-- Poetry 包管理工具
-- Playwright 浏览器驱动
-
-### 从源码安装
-
-```bash
-git clone https://github.com/sansan0/netease-note-backup.git
-cd netease-note-backup
-poetry install
-poetry run playwright install chromium
-```
-
-### 运行应用
-
-```bash
-poetry run netease_note_backup
-```
-
-## ⚙️ 配置选项
-
-### 图片设置
-
-- **图片大小**：调整导出 HTML 中的缩略图大小（50-500 像素）
-- **Base64 选项**：选择是否将图片转换为 Base64 格式嵌入 HTML
-
-### 导出范围
-
-- **范围选择**：设置起始和结束序号，选择部分动态导出
-- **最大范围**：一键设置为导出所有已爬取动态
-
-## 📄 许可证
-
-本项目采用 GPL-3.0 许可证 - 详见 [LICENSE](LICENSE) 文件
+[GPL-3.0](LICENSE)

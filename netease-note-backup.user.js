@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           网易云音乐笔记(动态)备份插件
 // @namespace      https://github.com/sansan0/netease-note-backup
-// @version        1.5
+// @version        3.1
 // @description    提取网易云音乐页面的文字内容，歌曲信息和图片
 // @author         sansan
 // @match          https://music.163.com/*
@@ -271,10 +271,12 @@
         }
     }
 
-    // 清理图片URL，移除参数
+    // 清理缩略图 URL；原图下载链接的 9999y9999 参数必须保留。
     function cleanImageUrl(url) {
         if (!url) return '';
-        return url.split('?')[0].replace(/^http:/, 'https:');
+        const secureUrl = url.replace(/^http:/, 'https:');
+        if (/[?&]param=9999y9999(?:&|$)/.test(secureUrl)) return secureUrl;
+        return secureUrl.split('?')[0];
     }
 
     // 将图片转换为base64格式
@@ -315,26 +317,141 @@
         });
     }
 
+    // 从网易云展示的时间文本中提取月份。无法可靠识别的相对时间会归入“未识别日期”，避免误归档。
+    function getMonthKey(timeText) {
+        const text = String(timeText || '').trim();
+        const fullDate = text.match(/(20\d{2})[\/.年-](\d{1,2})/);
+        if (fullDate) {
+            return `${fullDate[1]}-${String(fullDate[2]).padStart(2, '0')}`;
+        }
+
+        // 网易云常将当年动态展示为“8月2日 00:25”，缺少年份时按导出当年归档。
+        const monthAndDay = text.match(/(\d{1,2})月\d{1,2}日/);
+        if (monthAndDay) {
+            return `${new Date().getFullYear()}-${String(monthAndDay[1]).padStart(2, '0')}`;
+        }
+
+        return 'unknown';
+    }
+
+    function getMonthLabel(monthKey) {
+        if (monthKey === 'unknown') return '未识别日期';
+        const [year, month] = monthKey.split('-');
+        return `${year} 年 ${Number(month)} 月`;
+    }
+
+    function getYearKey(monthKey) {
+        return monthKey === 'unknown' ? 'unknown' : monthKey.split('-')[0];
+    }
+
+    function getYearLabel(yearKey) {
+        return yearKey === 'unknown' ? '未识别年份' : `${yearKey} 年`;
+    }
+
+    function escapeHtml(value) {
+        return String(value || '').replace(/[&<>'"]/g, char => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+        }[char]));
+    }
+
+    function getExportProfile() {
+        const profile = { name: '网易云音乐用户', avatar: '' };
+        try {
+            const iframe = document.getElementById('g_iframe');
+            const doc = iframe && iframe.contentDocument;
+            if (!doc) return profile;
+            const nameElement = doc.querySelector('#j-name-wrap');
+            if (nameElement && nameElement.textContent.trim()) profile.name = nameElement.textContent.trim();
+            const avatarElement = doc.querySelector('.head img, .avatar img, .m-proifo img');
+            if (avatarElement) profile.avatar = getOriginalImageUrl(avatarElement);
+        } catch (error) {
+            console.warn('读取导出账号信息失败:', error);
+        }
+        return profile;
+    }
+
     // 生成HTML导出内容，处理图片为base64格式
     async function generateHtmlContent(articles) {
+        const profile = getExportProfile();
+        const monthGroups = new Map();
+        articles.forEach(article => {
+            const monthKey = getMonthKey(article.time);
+            if (!monthGroups.has(monthKey)) monthGroups.set(monthKey, []);
+            monthGroups.get(monthKey).push(article);
+        });
+
+        const groups = Array.from(monthGroups, ([key, items]) => ({ key, items }));
+        const timelineYears = new Map();
+        groups.forEach(group => {
+            const yearKey = getYearKey(group.key);
+            if (!timelineYears.has(yearKey)) timelineYears.set(yearKey, []);
+            timelineYears.get(yearKey).push(group);
+        });
+        const availableMonths = Array.from(new Set(groups
+            .filter(group => group.key !== 'unknown')
+            .map(group => group.key.split('-')[1]))).sort();
+        const datedGroups = groups.filter(group => group.key !== 'unknown');
+        const dateRange = datedGroups.length
+            ? `${getMonthLabel(datedGroups[datedGroups.length - 1].key)} — ${getMonthLabel(datedGroups[0].key)}`
+            : '时间信息未能按月份归档';
+
         let html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>网易云音乐动态导出</title>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-        .article { border-bottom: 1px solid #eee; padding: 20px 0; }
-        .time { color: #888; margin-bottom: 10px; }
-        .text { white-space: pre-wrap; line-height: 1.6; }
-        .song { background-color: #f7f7f7; padding: 10px; margin: 10px 0; border-radius: 5px; }
-        .song a { color: #0c73c2; text-decoration: none; }
+        :root { color: #27272a; background: #f6f6f3; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; }
+        * { box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        body { margin: 0; padding: 40px 24px 80px; background: radial-gradient(circle at top, #fffdf7 0, #f6f6f3 42rem); }
+        .page { max-width: 1160px; margin: 0 auto; }
+        .hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 380px); gap: 28px; padding: 22px 4px 34px; align-items: center; }
+        .eyebrow { color: #c2410c; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+        h1 { margin: 8px 0; font-family: Georgia, "Noto Serif SC", serif; font-size: clamp(30px, 5vw, 48px); letter-spacing: -.04em; }
+        .summary { margin: 0; color: #71717a; font-size: 14px; }
+        .profile-card { display: flex; align-items: center; gap: 14px; min-height: 112px; padding: 20px; border: 1px solid #e9e8e2; border-radius: 16px; background: rgba(255,255,255,.68); }
+        .profile-avatar, .profile-avatar-fallback { width: 64px; height: 64px; flex: 0 0 64px; border-radius: 50%; background: #fed7aa; object-fit: cover; }
+        .profile-avatar-fallback { display: grid; place-items: center; color: #c2410c; font-size: 24px; font-weight: 700; }
+        .profile-label { margin: 0 0 5px; color: #a1a1aa; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+        .profile-name { margin: 0; color: #27272a; font-size: 18px; font-weight: 700; word-break: break-word; }
+        .archive-tools { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 10px; margin-top: 2px; }
+        .archive-tools input, .archive-tools select { min-height: 38px; border: 1px solid #deded8; border-radius: 9px; outline: none; background: rgba(255,255,255,.9); color: #3f3f46; font: inherit; font-size: 14px; }
+        .archive-tools input { flex: 1 1 230px; padding: 0 12px; }
+        .archive-tools select { flex: 0 1 150px; padding: 0 30px 0 12px; cursor: pointer; }
+        .archive-tools input:focus, .archive-tools select:focus { border-color: #ea580c; box-shadow: 0 0 0 3px rgba(234,88,12,.12); }
+        .layout { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 48px; align-items: start; }
+        .month-section { scroll-margin-top: 24px; margin-bottom: 40px; }
+        .month-title { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; color: #52525b; font-size: 14px; font-weight: 700; }
+        .month-title::after { content: ""; height: 1px; flex: 1; background: #deded8; }
+        .article { padding: 22px; margin-bottom: 14px; border: 1px solid #e9e8e2; border-radius: 16px; background: rgba(255,255,255,.88); box-shadow: 0 3px 14px rgba(39,39,42,.035); }
+        .time { display: inline-flex; align-items: center; margin-bottom: 15px; padding: 5px 9px; border-radius: 7px; background: #f4f4f1; color: #52525b; font-size: 14px; font-weight: 700; letter-spacing: .01em; }
+        .text { color: #3f3f46; white-space: pre-wrap; line-height: 1.8; word-break: break-word; }
+        .song { margin: 16px 0 2px; padding: 13px 15px; border-radius: 10px; background: #fff7ed; color: #78716c; font-size: 14px; line-height: 1.65; }
+        .song a { color: #c2410c; text-decoration: none; font-weight: 600; }
         .song a:hover { text-decoration: underline; }
-        .images { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
-        .images img { width: ${userSettings.imageSize}px; height: ${userSettings.imageSize}px; object-fit: cover; border-radius: 3px; cursor: pointer; }
-        .lightbox { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.8); z-index: 1000; justify-content: center; align-items: center; }
-        .lightbox img { max-width: 90%; max-height: 90%; object-fit: contain; }
-        .close-lightbox { position: absolute; top: 20px; right: 20px; color: white; font-size: 30px; cursor: pointer; }
+        .images { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 16px; }
+        .images img { display: block; max-width: ${userSettings.imageSize}px; max-height: ${userSettings.imageSize}px; width: auto; height: auto; object-fit: cover; border-radius: 9px; cursor: zoom-in; transition: transform .18s ease, box-shadow .18s ease; }
+        .images img:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(39,39,42,.16); }
+        .timeline { position: sticky; top: 26px; padding: 6px 0 6px 20px; border-left: 1px solid #d6d3d1; }
+        .timeline-title { margin: 0 0 12px; color: #a1a1aa; font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+        .timeline-year { margin: 0 0 10px; }
+        .timeline-year summary { cursor: pointer; color: #52525b; font-size: 13px; font-weight: 700; list-style: none; }
+        .timeline-year summary::-webkit-details-marker { display: none; }
+        .timeline-year summary::before { content: "▾"; display: inline-block; margin-right: 6px; color: #a1a1aa; transition: transform .18s ease; }
+        .timeline-year:not([open]) summary::before { transform: rotate(-90deg); }
+        .timeline-months { padding-top: 5px; }
+        .timeline-link { position: relative; display: block; padding: 7px 0; color: #71717a; font-size: 13px; text-decoration: none; transition: color .18s ease; }
+        .timeline-link::before { content: ""; position: absolute; left: -25px; top: 50%; width: 8px; height: 8px; border: 2px solid #f6f6f3; border-radius: 50%; background: #d6d3d1; transform: translateY(-50%); }
+        .timeline-link:hover, .timeline-link.active { color: #c2410c; font-weight: 700; }
+        .timeline-link.active::before { background: #ea580c; }
+        .timeline-count { margin-left: 5px; color: #a1a1aa; font-size: 11px; font-weight: 400; }
+        .no-results { display: none; padding: 42px 20px; border: 1px dashed #d6d3d1; border-radius: 14px; color: #71717a; text-align: center; }
+        .lightbox { display: none; position: fixed; inset: 0; padding: 30px; background-color: rgba(24,24,27,.88); z-index: 1000; justify-content: center; align-items: center; cursor: zoom-out; }
+        .lightbox img { max-width: 94%; max-height: 92%; object-fit: contain; border-radius: 5px; }
+        .close-lightbox { position: absolute; top: 16px; right: 22px; color: white; font-size: 32px; cursor: pointer; }
+        @media (max-width: 780px) { body { padding: 24px 16px 56px; } .hero { grid-template-columns: 1fr; padding-bottom: 24px; } .profile-card { min-height: auto; } .layout { display: block; } .timeline { position: sticky; top: 0; z-index: 10; display: flex; gap: 2px; overflow-x: auto; margin: 0 -16px 24px; padding: 10px 16px; border: 0; background: rgba(246,246,243,.94); backdrop-filter: blur(8px); } .timeline-title { display: none; } .timeline-link { flex: 0 0 auto; padding: 7px 10px; border-radius: 99px; background: #ecece7; } .timeline-link::before { display: none; } .timeline-link.active { background: #fff7ed; } .article { padding: 18px; border-radius: 13px; } }
     </style>
     <script>
         function openLightbox(imgSrc) {
@@ -346,17 +463,93 @@
         function closeLightbox() {
             document.getElementById("lightbox").style.display = "none";
         }
+        document.addEventListener("DOMContentLoaded", function() {
+            const links = document.querySelectorAll(".timeline-link");
+            const sections = document.querySelectorAll(".month-section");
+            const yearFilter = document.getElementById("year-filter");
+            const monthFilter = document.getElementById("month-filter");
+            const searchInput = document.getElementById("search-input");
+            const noResults = document.getElementById("no-results");
+            const applyFilters = function() {
+                const year = yearFilter.value;
+                const month = monthFilter.value;
+                const query = searchInput.value.trim().toLocaleLowerCase();
+                let visibleArticles = 0;
+                document.querySelectorAll(".article").forEach(article => {
+                    const matchesYear = year === "all" || article.dataset.year === year;
+                    const matchesMonth = month === "all" || article.dataset.monthNumber === month;
+                    const matchesSearch = !query || article.textContent.toLocaleLowerCase().includes(query);
+                    const visible = matchesYear && matchesMonth && matchesSearch;
+                    article.hidden = !visible;
+                    if (visible) visibleArticles += 1;
+                });
+                sections.forEach(section => { section.hidden = !section.querySelector(".article:not([hidden])"); });
+                noResults.style.display = visibleArticles ? "none" : "block";
+            };
+            yearFilter.addEventListener("change", applyFilters);
+            monthFilter.addEventListener("change", applyFilters);
+            searchInput.addEventListener("input", applyFilters);
+            if (!links.length || !sections.length || !window.IntersectionObserver) return;
+            const setActive = function(id) {
+                links.forEach(link => link.classList.toggle("active", link.getAttribute("href") === "#" + id));
+            };
+            const observer = new IntersectionObserver(function(entries) {
+                entries.forEach(entry => { if (entry.isIntersecting) setActive(entry.target.id); });
+            }, { rootMargin: "-15% 0px -70% 0px", threshold: 0 });
+            sections.forEach(section => observer.observe(section));
+        });
     </script>
 </head>
 <body>
     <div id="lightbox" class="lightbox" onclick="closeLightbox()">
         <span class="close-lightbox">&times;</span>
         <img id="lightbox-img" src="" alt="大图">
-    </div>`;
-
-        for (const article of articles) {
+    </div>
+    <main class="page">
+        <header class="hero">
+            <div class="hero-copy">
+            <div class="eyebrow">NetEase Cloud Music · Archive</div>
+            <h1>我的动态回忆</h1>
+            <p class="summary">${articles.length} 条动态 · ${dateRange}</p>
+            </div>
+            <aside class="profile-card" aria-label="导出账号信息">${profile.avatar
+                ? `<img class="profile-avatar" src="${escapeHtml(profile.avatar)}" alt="${escapeHtml(profile.name)}的头像" onerror="this.style.display='none'">`
+                : `<div class="profile-avatar-fallback" aria-hidden="true">${escapeHtml(profile.name.charAt(0))}</div>`}
+                <div><p class="profile-label">NetEase Cloud Music</p><p class="profile-name">${escapeHtml(profile.name)}</p></div>
+            </aside>
+            <div class="archive-tools" aria-label="筛选与搜索">
+                <select id="year-filter" aria-label="按年份筛选">
+                    <option value="all">全部年份</option>`;
+        for (const [yearKey] of timelineYears) {
             html += `
-    <div class="article">
+                    <option value="${yearKey}">${getYearLabel(yearKey)}</option>`;
+        }
+        html += `
+                </select>
+                <select id="month-filter" aria-label="按时间筛选">
+                    <option value="all">全部月份</option>`;
+        for (const month of availableMonths) {
+            html += `
+                    <option value="${month}">${Number(month)} 月</option>`;
+        }
+        html += `
+                </select>
+                <input id="search-input" type="search" placeholder="搜索动态、歌曲或歌手…" aria-label="搜索动态">
+            </div>
+        </header>
+        <div class="layout">
+            <div class="feed">
+                <div class="no-results" id="no-results">没有找到匹配的动态</div>`;
+
+        for (const group of groups) {
+            const sectionId = `month-${group.key}`;
+            html += `
+                <section class="month-section" id="${sectionId}">
+                    <h2 class="month-title">${getMonthLabel(group.key)}</h2>`;
+
+            for (const article of group.items) {
+                html += `
+    <article class="article" data-month="${group.key}" data-year="${getYearKey(group.key)}" data-month-number="${group.key === 'unknown' ? '' : group.key.split('-')[1]}">
         <div class="time">${article.time}</div>
         <div class="text">${article.text}</div>`;
 
@@ -390,11 +583,36 @@
         </div>`;
             }
 
+                html += `
+    </article>`;
+            }
             html += `
-    </div>`;
+                </section>`;
         }
 
         html += `
+</div>
+            <nav class="timeline" aria-label="按月浏览">
+                <div class="timeline-title">时间轴</div>`;
+        for (const [yearKey, yearGroups] of timelineYears) {
+            const yearCount = yearGroups.reduce((count, group) => count + group.items.length, 0);
+            html += `
+                <details class="timeline-year" open>
+                    <summary>${getYearLabel(yearKey)}<span class="timeline-count">${yearCount}</span></summary>
+                    <div class="timeline-months">`;
+            for (const group of yearGroups) {
+                const sectionId = `month-${group.key}`;
+                html += `
+                        <a class="timeline-link" href="#${sectionId}">${group.key === 'unknown' ? '未识别日期' : `${Number(group.key.split('-')[1])} 月`}<span class="timeline-count">${group.items.length}</span></a>`;
+            }
+            html += `
+                    </div>
+                </details>`;
+        }
+        html += `
+            </nav>
+        </div>
+    </main>
 </body>
 </html>`;
         return html;
@@ -429,51 +647,21 @@
         return (userId ? userId + '_' : '') + userName.replace(/[\\/:*?"<>|]/g, '_') + '.html';
     }
 
-    // 完全重写下载函数，使用数据URL而不是Blob URL
+    // 使用下载链接直接保存，避免 window.open 被浏览器的弹窗拦截器阻止。
     function safeDownloadFile(content, filename) {
         try {
-            const base64Content = btoa(unescape(encodeURIComponent(content)));
-            const dataUrl = `data:text/html;charset=utf-8;base64,${base64Content}`;
+            const blob = new Blob([content], { type: 'text/html;charset=utf-8' });
+            const objectUrl = URL.createObjectURL(blob);
+            const downloadLink = document.createElement('a');
+            downloadLink.href = objectUrl;
+            downloadLink.download = filename;
+            // 网易云会委托处理页面内 a 标签的点击并改写 hash；阻止事件冒泡，
+            // 同时不把下载链接插入页面，确保由浏览器执行原生 download 行为。
+            downloadLink.addEventListener('click', event => event.stopPropagation());
+            downloadLink.click();
 
-            const popupWindow = window.open('', '_blank', 'width=800,height=600');
-            if (!popupWindow) {
-                alert('下载失败：请允许弹出窗口');
-                return false;
-            }
-
-            popupWindow.document.write(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>下载 - ${filename}</title>
-                    <style>
-                        body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
-                        h3 { margin-bottom: 20px; }
-                        .button {
-                            display: inline-block;
-                            padding: 10px 20px;
-                            background: #2196F3;
-                            color: white;
-                            border-radius: 4px;
-                            text-decoration: none;
-                            margin: 10px;
-                            cursor: pointer;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <h3>文件已准备好下载</h3>
-                    <p>文件名: ${filename}</p>
-                    <a id="download-link" class="button" href="${dataUrl}" download="${filename}">点击下载</a>
-                    <button onclick="window.close()" class="button">关闭窗口</button>
-                    <script>
-                        setTimeout(function() {
-                            document.getElementById('download-link').click();
-                        }, 500);
-                    </script>
-                </body>
-                </html>
-            `);
+            // 下载开始后再释放临时地址；过早释放会导致部分浏览器下载空文件。
+            setTimeout(() => URL.revokeObjectURL(objectUrl), 60 * 1000);
 
             return true;
         } catch (e) {
@@ -565,6 +753,7 @@
             uiElements.statusDisplay.innerText = `正在处理 ${selectedArticles.length} 篇文章...`;
 
             try {
+                await resolveOriginalImages(selectedArticles);
                 if (userSettings.useBase64Images) {
                     uiElements.statusDisplay.innerText = `正在处理和转换图片...这可能需要一些时间`;
                 }
@@ -797,6 +986,25 @@
         }
     }
 
+    // 网易云列表页的 src 常为方形裁剪缩略图，原图通常在懒加载属性中。
+    function getOriginalImageUrl(img) {
+        const attributes = ['data-original', 'data-origin', 'data-src', 'data-lazy-src', 'data-url'];
+        // 网易云的不同页面版本会把原图地址放在 img 或可点击的 .pic 父元素上。
+        for (const element of [img, img.closest('.pic')]) {
+            if (!element) continue;
+            for (const attribute of attributes) {
+                const source = element.getAttribute(attribute);
+                if (source) {
+                    return source.split('?')[0].replace(/^http:/, 'https:');
+                }
+            }
+        }
+
+        const source = img.getAttribute('src');
+        if (source) return source.split('?')[0].replace(/^http:/, 'https:');
+        return '';
+    }
+
     // 提取图片URL
     function extractImageUrls(elem) {
         try {
@@ -805,20 +1013,17 @@
 
             if (imageElements && imageElements.length > 0) {
                 imageElements.forEach(img => {
-                    const src = img.getAttribute('src');
-                    if (src) {
-                        const cleanSrc = src.split('?')[0].replace(/^http:/, 'https:');
-                        if (cleanSrc) {
-                            imageUrls.push(cleanSrc);
-                        }
+                    const originalSrc = getOriginalImageUrl(img);
+                    if (originalSrc) {
+                        imageUrls.push(originalSrc);
                     }
                 });
             } else {
                 const coverImg = elem.querySelector('.cover .lnk img');
-                if (coverImg && coverImg.src) {
-                    const cleanSrc = coverImg.src.split('?')[0].replace(/^http:/, 'https:');
-                    if (cleanSrc) {
-                        imageUrls.push(cleanSrc);
+                if (coverImg) {
+                    const originalSrc = getOriginalImageUrl(coverImg);
+                    if (originalSrc) {
+                        imageUrls.push(originalSrc);
                     }
                 }
             }
@@ -827,6 +1032,165 @@
         } catch (e) {
             console.error('提取图片URL失败:', e);
             return [];
+        }
+    }
+
+    function wait(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function getViewerDocuments(iframeDoc) {
+        // NetEase has used both iframe-local and top-level image viewers.
+        return iframeDoc === document ? [document] : [iframeDoc, document];
+    }
+
+    function findVisibleElement(documents, selector) {
+        for (const doc of documents) {
+            for (const element of doc.querySelectorAll(selector)) {
+                if (element.getClientRects().length > 0) return element;
+            }
+        }
+        return null;
+    }
+
+    async function closeImageViewer(iframeDoc) {
+        const documents = getViewerDocuments(iframeDoc);
+        const closeButton = findVisibleElement(documents,
+            '.m-layer .zcls, .m-layer [title="关闭"], .zcls, [title="关闭"]'
+        );
+        if (closeButton) {
+            closeButton.click();
+            await wait(250);
+            return closeButton.getClientRects().length === 0;
+        }
+
+        // Fallback for viewer versions without a discoverable close button.
+        for (const doc of documents) {
+            doc.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true
+            }));
+        }
+        await wait(250);
+        return !findVisibleElement(documents, '.m-layer, .u-mask');
+    }
+
+    function hasSameImagePath(firstUrl, secondUrl) {
+        try {
+            return new URL(firstUrl).pathname === new URL(secondUrl).pathname;
+        } catch (error) {
+            return firstUrl === secondUrl;
+        }
+    }
+
+    function findItemViewerElement(itemElement, selector) {
+        const candidates = itemElement.querySelectorAll(`.showpic ${selector}`);
+        for (const element of candidates) {
+            if (element.getClientRects().length > 0) return element;
+        }
+        return null;
+    }
+
+    async function closeItemViewer(itemElement) {
+        const foldButton = findItemViewerElement(itemElement, 'a[data-action="fold"]');
+        if (!foldButton) return true;
+        foldButton.click();
+        await wait(180);
+        return !findItemViewerElement(itemElement, 'a[data-action="fold"]');
+    }
+
+    async function getViewerOriginalUrl(iframeDoc, itemElement, pictureIndex, previousUrl = '', expectedUrl = '') {
+        const documents = getViewerDocuments(iframeDoc);
+        // 每条动态的“查看原图”都在自身 showpic 面板中，绝不能跨 li.itm 查找。
+        // 必须逐条动态重新查询图片节点：查看器关闭后网易云可能会重绘列表，旧节点引用不可靠。
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const viewerClosed = await closeItemViewer(itemElement);
+            if (!viewerClosed) {
+                await wait(220);
+                if (!await closeItemViewer(itemElement)) {
+                    throw new Error('图片查看器未完全关闭，停止切换图片');
+                }
+            }
+            itemElement.scrollIntoView({ block: 'center', inline: 'nearest' });
+            await wait(180);
+            const pictureElement = itemElement.querySelectorAll('.pics .pic')[pictureIndex];
+            if (!pictureElement) {
+                throw new Error(`当前动态的第 ${pictureIndex + 1} 张图片不存在`);
+            }
+            // 网易云把打开查看器的事件绑定在实际 img 上；点击 .pic 容器会导致
+            // 后续动态的查看器不切图，从而重复读取上一张图片的原图链接。
+            const imageElement = pictureElement.querySelector('img') || pictureElement;
+            const view = iframeDoc.defaultView || window;
+            ['mousedown', 'mouseup', 'click'].forEach(type => imageElement.dispatchEvent(
+                new MouseEvent(type, { bubbles: true, cancelable: true, view })
+            ));
+            await wait(300 + attempt * 180);
+
+            const viewOriginal = findItemViewerElement(itemElement, 'a[data-action="big"]');
+            if (!viewOriginal) {
+                await closeItemViewer(itemElement);
+                throw new Error('当前动态未找到“查看原图”按钮');
+            }
+            viewOriginal.click();
+            await wait(280 + attempt * 150);
+
+            const viewerImage = findVisibleElement(documents, '.m-layer img') ||
+                findItemViewerElement(itemElement, 'img');
+            const originalUrl = viewerImage ? getOriginalImageUrl(viewerImage) : '';
+            // “查看原图”会打开全屏层；每次读取后都同时关闭全屏层与当前 item 面板，
+            // 防止导出完成后遗留多个图片查看窗口。
+            const globalViewerClosed = await closeImageViewer(iframeDoc);
+            const itemViewerClosed = await closeItemViewer(itemElement);
+            const isStale = previousUrl && originalUrl === previousUrl && expectedUrl &&
+                !hasSameImagePath(originalUrl, expectedUrl);
+
+            if (originalUrl && globalViewerClosed && itemViewerClosed && !isStale) return originalUrl;
+            await wait(120);
+        }
+
+        throw new Error('图片查看器未切换到当前图片（已重试 3 次）');
+    }
+
+    // 网易云只会在图片查看器中暴露“下载原图”链接。导出前才读取，
+    // 这样平时扫描动态不会被逐张图片的操作拖慢。
+    async function resolveOriginalImages(articles) {
+        const iframeDoc = getIframeDocument();
+        if (!iframeDoc) return;
+
+        const pictureArticles = articles.filter(article =>
+            article.itemElem && article.itemElem.querySelectorAll('.pics .pic').length > 0
+        );
+        const total = pictureArticles.reduce((count, article) =>
+            count + article.itemElem.querySelectorAll('.pics .pic').length, 0
+        );
+        let completed = 0;
+        let previousViewerUrl = '';
+
+        for (const article of pictureArticles) {
+            const pictureElements = Array.from(article.itemElem.querySelectorAll('.pics .pic'));
+            const originalUrls = [];
+
+            for (let pictureIndex = 0; pictureIndex < pictureElements.length; pictureIndex++) {
+                completed += 1;
+                if (uiElements) {
+                    uiElements.statusDisplay.innerText = `正在读取原图链接 (${completed}/${total})...`;
+                }
+                try {
+                    const fallbackUrl = article.images[originalUrls.length] || '';
+                    const originalUrl = await getViewerOriginalUrl(
+                        iframeDoc, article.itemElem, pictureIndex, previousViewerUrl, fallbackUrl
+                    );
+                    if (!originalUrl) throw new Error('未找到“下载原图”链接');
+                    originalUrls.push(originalUrl);
+                    previousViewerUrl = originalUrl;
+                } catch (error) {
+                    console.warn('读取原图链接失败，使用备用图片地址:', error);
+                    originalUrls.push(article.images[originalUrls.length] || '');
+                }
+            }
+
+            if (originalUrls.length === article.images.length && originalUrls.every(Boolean)) {
+                article.images = originalUrls;
+            }
         }
     }
 
@@ -849,7 +1213,7 @@
             const timeElem = elem.querySelector('.time');
             const textElem = elem.querySelector('.text');
 
-            if (timeElem && textElem) {
+            if (timeElem) {
                 let time = '';
                 const timeLink = timeElem.querySelector('a');
                 if (timeLink) {
@@ -858,14 +1222,16 @@
                     time = timeElem.textContent.trim();
                 }
 
-                const text = textElem.innerHTML.trim();
+                const text = textElem ? textElem.innerHTML.trim() : '';
+                const song = extractSongInfo(elem);
+                const images = extractImageUrls(elem);
 
-                if (time && text) {
-                    const articleId = generateElementId(elem, time, text);
+                // 分享单曲等动态可能没有 .text 正文；只要存在正文、歌曲或图片之一就应保留。
+                if (time && (text || song || images.length > 0)) {
+                    const identityText = text || `${song ? `${song.title}-${song.artist}` : ''}-${images.join('|')}`;
+                    const articleId = generateElementId(elem, time, identityText);
 
                     if (!processedIds.has(articleId)) {
-                        const song = extractSongInfo(elem);
-                        const images = extractImageUrls(elem);
                         const domIndex = articleArray.length;
 
                         articleArray.push({
@@ -873,9 +1239,11 @@
                             time: time,
                             text: text,
                             song: song,
-                            images: images,
-                            elem: elem,
-                            domIndex: domIndex
+                        images: images,
+                        elem: elem,
+                        // 图片查看器及“查看原图”控件以完整的动态条目 li.itm 为作用范围。
+                        itemElem: elem.closest('li.itm') || elem,
+                        domIndex: domIndex
                         });
 
                         processedIds.add(articleId);
