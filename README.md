@@ -4,6 +4,14 @@
 
 > 仅在你已登录的浏览器中处理你有权访问的动态内容；不使用网易云官方 API。
 
+## 作者与来源
+
+- 原作者：[@sansan0](https://github.com/sansan0)
+- 原始项目：[sansan0/netease-note-backup](https://github.com/sansan0/netease-note-backup)
+- 当前维护仓库：[Imp7019/netease-note-backup](https://github.com/Imp7019/netease-note-backup)
+
+本仓库保留并致谢原项目的基础实现，当前维护重点为油猴脚本及其导出体验优化。
+
 ## 使用方式
 
 ### 1. 安装油猴扩展
