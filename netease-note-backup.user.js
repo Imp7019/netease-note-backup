@@ -449,21 +449,88 @@
         .timeline-count { margin-left: 5px; color: #a1a1aa; font-size: 11px; font-weight: 400; }
         .no-results { display: none; padding: 42px 20px; border: 1px dashed #d6d3d1; border-radius: 14px; color: #71717a; text-align: center; }
         .lightbox { display: none; position: fixed; inset: 0; padding: 30px; background-color: rgba(24,24,27,.88); z-index: 1000; justify-content: center; align-items: center; cursor: zoom-out; }
-        .lightbox img { max-width: 94%; max-height: 92%; object-fit: contain; border-radius: 5px; }
-        .close-lightbox { position: absolute; top: 16px; right: 22px; color: white; font-size: 32px; cursor: pointer; }
+        .lightbox img { max-width: 94%; max-height: 92%; object-fit: contain; border-radius: 5px; cursor: default; }
+        .close-lightbox { position: absolute; top: 16px; right: 22px; z-index: 2; padding: 0; border: 0; background: transparent; color: white; font-size: 32px; line-height: 1; cursor: pointer; }
+        .lightbox-button { display: none; position: absolute; top: 50%; z-index: 2; width: 46px; height: 64px; border: 0; border-radius: 10px; background: rgba(255,255,255,.16); color: white; font-size: 42px; line-height: 1; cursor: pointer; transform: translateY(-50%); transition: background .18s ease; }
+        .lightbox-button:hover { background: rgba(255,255,255,.3); }
+        .lightbox-prev { left: 22px; }
+        .lightbox-next { right: 22px; }
+        body.lightbox-open { overflow: hidden; }
         @media (max-width: 780px) { body { padding: 24px 16px 56px; } .hero { grid-template-columns: 1fr; padding-bottom: 24px; } .profile-card { min-height: auto; } .layout { display: block; } .timeline { position: sticky; top: 0; z-index: 10; display: flex; gap: 2px; overflow-x: auto; margin: 0 -16px 24px; padding: 10px 16px; border: 0; background: rgba(246,246,243,.94); backdrop-filter: blur(8px); } .timeline-title { display: none; } .timeline-link { flex: 0 0 auto; padding: 7px 10px; border-radius: 99px; background: #ecece7; } .timeline-link::before { display: none; } .timeline-link.active { background: #fff7ed; } .article { padding: 18px; border-radius: 13px; } }
     </style>
     <script>
-        function openLightbox(imgSrc) {
-            const lightbox = document.getElementById("lightbox");
+        let currentGallery = [];
+        let currentImageIndex = 0;
+
+        function renderLightboxImage() {
+            if (!currentGallery.length) return;
             const lightboxImg = document.getElementById("lightbox-img");
-            lightboxImg.src = imgSrc;
-            lightbox.style.display = "flex";
+            const image = currentGallery[currentImageIndex];
+            lightboxImg.src = image.src;
+            lightboxImg.alt = "图片 " + (currentImageIndex + 1) + " / " + currentGallery.length;
+            const buttonDisplay = currentGallery.length > 1 ? "grid" : "none";
+            document.getElementById("lightbox-prev").style.display = buttonDisplay;
+            document.getElementById("lightbox-next").style.display = buttonDisplay;
         }
+
+        function openLightbox(imgElement) {
+            const imageContainer = imgElement.closest(".images");
+            if (!imageContainer) return;
+
+            // 只收集当前动态下的图片，避免切换到其他动态。
+            currentGallery = Array.from(imageContainer.querySelectorAll("img"))
+                .filter(image => image.getAttribute("src") && image.style.display !== "none");
+            currentImageIndex = Math.max(0, currentGallery.indexOf(imgElement));
+
+            const lightbox = document.getElementById("lightbox");
+            if (!currentGallery.length) return;
+            renderLightboxImage();
+            lightbox.style.display = "flex";
+            document.body.classList.add("lightbox-open");
+        }
+
+        function showPreviousImage(event) {
+            event.stopPropagation();
+            if (currentGallery.length < 2) return;
+            currentImageIndex = (currentImageIndex - 1 + currentGallery.length) % currentGallery.length;
+            renderLightboxImage();
+        }
+
+        function showNextImage(event) {
+            event.stopPropagation();
+            if (currentGallery.length < 2) return;
+            currentImageIndex = (currentImageIndex + 1) % currentGallery.length;
+            renderLightboxImage();
+        }
+
         function closeLightbox() {
             document.getElementById("lightbox").style.display = "none";
+            document.getElementById("lightbox-img").src = "";
+            document.body.classList.remove("lightbox-open");
+            currentGallery = [];
+            currentImageIndex = 0;
         }
         document.addEventListener("DOMContentLoaded", function() {
+            const lightbox = document.getElementById("lightbox");
+            const closeButton = document.querySelector(".close-lightbox");
+            const previousButton = document.getElementById("lightbox-prev");
+            const nextButton = document.getElementById("lightbox-next");
+            document.querySelectorAll(".images img").forEach(image => {
+                image.addEventListener("click", () => openLightbox(image));
+            });
+            closeButton.addEventListener("click", closeLightbox);
+            previousButton.addEventListener("click", showPreviousImage);
+            nextButton.addEventListener("click", showNextImage);
+            lightbox.addEventListener("click", event => {
+                if (event.target === lightbox) closeLightbox();
+            });
+            document.addEventListener("keydown", event => {
+                if (lightbox.style.display !== "flex") return;
+                if (event.key === "ArrowLeft") showPreviousImage(event);
+                if (event.key === "ArrowRight") showNextImage(event);
+                if (event.key === "Escape") closeLightbox();
+            });
+
             const links = document.querySelectorAll(".timeline-link");
             const sections = document.querySelectorAll(".month-section");
             const yearFilter = document.getElementById("year-filter");
@@ -501,8 +568,10 @@
     </script>
 </head>
 <body>
-    <div id="lightbox" class="lightbox" onclick="closeLightbox()">
-        <span class="close-lightbox">&times;</span>
+    <div id="lightbox" class="lightbox">
+        <button id="lightbox-prev" class="lightbox-button lightbox-prev" type="button" aria-label="上一张">&#8249;</button>
+        <button id="lightbox-next" class="lightbox-button lightbox-next" type="button" aria-label="下一张">&#8250;</button>
+        <button class="close-lightbox" type="button" aria-label="关闭">&times;</button>
         <img id="lightbox-img" src="" alt="大图">
     </div>
     <main class="page">
@@ -571,11 +640,11 @@
                             const base64Image = await convertImageToBase64(cleanedUrl);
                             if (base64Image) {
                                 html += `
-            <img src="${base64Image}" alt="图片" loading="lazy" onclick="openLightbox('${base64Image}')" />`;
+            <img src="${base64Image}" alt="图片" loading="lazy" />`;
                             }
                         } else {
                             html += `
-            <img src="${cleanedUrl}" alt="图片" loading="lazy" onclick="openLightbox('${cleanedUrl}')" onerror="this.style.display='none';" />`;
+            <img src="${cleanedUrl}" alt="图片" loading="lazy" onerror="this.style.display='none';" />`;
                         }
                     }
                 }
